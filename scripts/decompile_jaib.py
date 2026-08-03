@@ -8,11 +8,13 @@ decompile_jaib.py — استخراج وتحليل ملف APK بدون الحاج
 الاستخدام:
     .venv/bin/python scripts/decompile_jaib.py <path-to.apk> [output_dir]
 """
-import sys, os, re, zipfile, hashlib, datetime
+import sys, os, re, zipfile, hashlib, datetime, logging
+
+logging.disable(logging.CRITICAL)  # كتم سجلات androguard
 
 try:
     from androguard.core.apk import APK
-    from androguard.core.bytecodes.dvm import DalvikVMFormat
+    from androguard.core.dex import DEX
     from androguard.core.axml import AXMLPrinter, ARSCParser
 except Exception as e:
     print("FATAL: androguard not available:", e)
@@ -90,28 +92,36 @@ def main():
             for pv in sorted(a.get_providers()):
                 out_write(f, f"  - {pv}")
 
-            out_write(f, f"\n### الملفات المعرّفة (schemes/features)")
-            for x in sorted(a.get_android_manifest_axml().get_xml().getElementsByTagName("uses-feature") or []):
-                pass
+            out_write(f, "\n### ميزات الجهاز المطلوبة (uses-feature)")
             try:
-                axml = a.get_android_manifest_axml()
-                for el in axml.get_xml().getElementsByTagName("uses-feature"):
-                    out_write(f, "  - feature: " + (el.getAttribute("android:name") or "") + " (required=" + (el.getAttribute("android:required") or "?") + ")")
-                for el in axml.get_xml().getElementsByTagName("uses-sdk"):
-                    out_write(f, "  - sdk: " + el.toxml()[:200])
+                axml_tree = AXMLPrinter(z.read("AndroidManifest.xml")).get_xml()
+                found = False
+                for el in axml_tree.getElementsByTagName("uses-feature"):
+                    found = True
+                    out_write(f, "  - " + (el.getAttribute("android:name") or el.getAttribute("android:glEsVersion") or "") + " (required=" + (el.getAttribute("android:required") or "?") + ")")
+                if not found:
+                    out_write(f, "  (لا يوجد)")
             except Exception as e:
-                out_write(f, "  (فشل قراءة تفاصيل المانيفست: %s)" % e)
+                out_write(f, "  (فشل قراءة uses-feature: %s)" % e)
 
             # ---------- 3) الشهادة ----------
             print("[4/7] الشهادة ...")
+            out_write(f, "\n## شهادة التوقيع")
             try:
-                out_write(f, "\n## شهادة التوقيع")
-                out_write(f, f"- اسم الملف: {a.get_signature_name()}")
-                cert = a.get_certificate()
-                for h in (hashlib.sha256(cert), hashlib.sha1(cert)):
-                    out_write(f, f"- {h.name}: {h.hexdigest()}")
+                sig_name = a.get_signature_name()
+                out_write(f, f"- اسم الملف: {sig_name}")
+                cert = a.get_certificate(sig_name)
+                der = cert.dump() if hasattr(cert, "dump") else bytes(cert)
+                out_write(f, f"- SHA-256 (DER): {hashlib.sha256(der).hexdigest()}")
+                out_write(f, f"- SHA-1 (DER): {hashlib.sha1(der).hexdigest()}")
+                try:
+                    out_write(f, f"- المُصدر: {cert.issuer.native}")
+                    out_write(f, f"- المالك: {cert.subject.native}")
+                    out_write(f, f"- الصلاحية: {cert.not_valid_before} → {cert.not_valid_after}")
+                except Exception:
+                    pass
             except Exception as e:
-                out_write(f, "\n## الشهادة (فشل): %s" % e)
+                out_write(f, "  (فشل تفاصيل الشهادة: %s)" % e)
         except Exception as e:
             out_write(f, "\n## المانيفست (فشل): %s" % e)
 
@@ -122,12 +132,15 @@ def main():
                 arsc = ARSCParser(z.read("resources.arsc"))
                 strs = set()
                 try:
-                    for s in arsc.get_strings():
-                        strs.add(s)
+                    for pkg, locales in arsc.get_resolved_strings().items():
+                        for loc, resmap in locales.items():
+                            for rid, s in resmap.items():
+                                if isinstance(s, str):
+                                    strs.add(s)
                 except Exception:
                     pass
                 out_write(f, f"\n## سلاسل الموارد (resources.arsc) — {len(strs)} سلسلة")
-                interesting = [s for s in strs if isinstance(s, str) and 2 < len(s) < 200]
+                interesting = [s for s in strs if 2 < len(s) < 200]
                 for s in sorted(interesting):
                     out_write(f, "  • " + s)
         except Exception as e:
@@ -139,12 +152,19 @@ def main():
         all_strings = set()
         for df in dex_files:
             try:
-                dvm = DalvikVMFormat(z.read(df))
+                dvm = DEX(z.read(df))
                 for s in dvm.get_strings():
                     all_strings.add(s)
             except Exception as e:
                 out_write(f, f"\n## DEX {df} (فشل): {e}")
-        out_write(f, f"\n## سلاسل DEX — {len(all_strings)} سلسلة")
+        # ملف مستقل بكل السلاسل للبحث اليدوي
+        try:
+            with open(os.path.join(outdir, "dex_strings.txt"), "w", encoding="utf-8") as sf:
+                for s in sorted(all_strings):
+                    sf.write(s.replace("\n", "\\n") + "\n")
+        except Exception:
+            pass
+        out_write(f, f"\n## سلاسل DEX — {len(all_strings)} سلسلة (محفوظة كاملة في dex_strings.txt)")
         # عناوين API/شبكات
         urls = sorted({s for s in all_strings if re.search(r'https?://', s)})
         out_write(f, f"\n### عناوين URL ({len(urls)})")
@@ -172,7 +192,7 @@ def main():
         classes = set()
         for df in dex_files:
             try:
-                dvm = DalvikVMFormat(z.read(df))
+                dvm = DEX(z.read(df))
                 for c in dvm.get_classes():
                     classes.add(c.get_name())
             except Exception:
