@@ -64,6 +64,21 @@
 
 **مستجدات الإصدار 0.4.9.9:** حافظة نقود (Money Box) • بطاقة شبكات الواي فاي • تحسين الأداء والواجهات • إصلاح أخطاء
 
+### بوابة الدفع للتجار (Payment API) — من تكامل حقيقي على GitHub
+عثرت على مشروع Laravel حقيقي (mazen41/cars-managment) يستخدم بوابة جيب للدفع، وهو يكشف بنية واجهة جيب للتجار:
+
+| العنصر | القيمة |
+|---|---|
+| الخادم | `https://www.api2.e-jaib.com:5088` |
+| تسجيل الدخول (Agent) | `POST /api/v1/TokenAuth/LogAPI` — يُرسل `userName`, `password`, `agentCode` ويستلم `accessToken` + `pinApi` + `expire` |
+| تنفيذ عملية شراء | `POST /api/v1/BuyOnline/ExeBuy` — `pinApi, mobile, amount, currencyCode, code, requestID, notes` (مصادقة Bearer) |
+| الاسترداد | `POST /api/v1/BuyOnline/RefoundBuy` |
+| متابعة العملية | `POST /api/v1/BuyOnline/CheckProgress` |
+| تغيير كلمة المرور | `POST /api/v1/Others/ChangePasswordAgent` |
+| العملات المدعومة | YER (ريال يمني) و USD (دولار) |
+
+هذا يؤكد أن التطبيق يعمل على بنية API موثقة للتجار، ويشرح كيف تظهر عمليات "الدفع برمز" في التطبيق.
+
 ---
 
 ## 4) التحليل التقني والأذونات
